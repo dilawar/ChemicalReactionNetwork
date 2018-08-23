@@ -9,10 +9,7 @@ __maintainer__       = "Dilawar Singh"
 __email__            = "dilawars@ncbs.res.in"
 __status__           = "Development"
 
-try:
-    import lxml.etree as ET
-except Exception as e:
-    import xml.etree.ElementTree as ET
+import lxml.etree as ET
 import os
 import sys
 import re
@@ -27,6 +24,33 @@ def _split_line( line, at=','):
     fs = [ x.strip() for x in line.split( at ) if x.strip() ]
     return fs
 
+def _parse_species( s ):
+    m = re.match( r'(\d*)(\w+)', s)
+    n = 1
+    if m.group(1):
+        n = int(m.group(1))
+    return str(n), m.group(2)
+
+def _add_sub_prd( r, subXML, prdXML ):
+    global root_
+    subs, prds = [ _split_line(x, '+') for x in _split_line(r, u'<->') ]
+
+    # Add them to root_
+    species = root_.find( 'listOfSpecies' )
+    for s in subs + prds:
+        # if already exists then do not add them.
+        n, name = _parse_species( s )
+        if species.xpath( "./species[@name='%s']" % name ):
+            print( 'Already added: %s' % name)
+        ET.SubElement( species, 'species', compartment='default', id=name, name=name)
+
+    for s in subs:
+        n, name = _parse_species( s )
+        e = ET.SubElement( subXML, 'speciesReference', species=name, stoichiometry=n)
+    for p in prds:
+        n, name = _parse_species( p )
+        e = ET.SubElement( prdXML, 'speciesReference', species=name, stoichiometry=n)
+
 def _add_reac( line, xml):
     line = re.sub( r'r\d+\:\s*', '', line )
     tx = ET.SubElement( xml, 'raw_input' )
@@ -34,8 +58,14 @@ def _add_reac( line, xml):
     fs = _split_line( line )
     r, params = fs[0], fs[1:]
     params = [ x.split( '=') for x in params ]
-    for k, v in params:
-        x = ET.SubElement( xml, 'param', name = k, value=v )
+
+    ex = ET.SubElement( xml, 'kineticLaw' )
+    ex = ET.SubElement( ex, 'kf_kb_law', attrib=dict(params) )
+
+    # now add substrate and products
+    subXML = ET.SubElement( xml, 'listOfReactants' )
+    subPrd = ET.SubElement( xml, 'listOfProducts' )
+    _add_sub_prd( r, subXML, subPrd )
 
 def _add_expr( line, xml ):
     line = re.sub( r'e\S*\:\s*', '', line )
@@ -56,7 +86,8 @@ def _parse_line( xml, idx, line ):
         return 
     
     if line[0].lower() == 'r':
-        r = ET.SubElement( xml, 'reaction', attrib=dict(lineno=str(idx)) )
+        rid = re.search( r'(r\w+):', line).group(1)
+        r = ET.SubElement( xml, 'reaction', id=rid )
         _add_reac( line, r )
     elif line[0].lower() == 'e':
         e = ET.SubElement( xml, 'expr', attrib=dict(lineno=str(idx)) )
@@ -66,8 +97,10 @@ def _parse_line( xml, idx, line ):
 
 def parse_plain_text( text ):
     global root_
+    reacs = ET.SubElement( root_, 'listOfReactions' )
+    species = ET.SubElement( root_, 'listOfSpecies' )
     for i, l in enumerate(text.split( '\n' )):
-        _parse_line( root_, i, l.strip() )
+        _parse_line( reacs, i, l.strip() )
     return root_
 
 def parse( filename, fmt = 'plain' ):
